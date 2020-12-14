@@ -231,6 +231,26 @@ Java 实例化对象过程：
 
    “Mark-Copy 算法”，为了能够并行地标记和整理将空间分成两块，每次只激活其中地一块，垃圾回收时只需要把存活对象复制到另外一块未激活地空间上，将未激活地空间标记为已激活，将已激活空间标记为未激活，然后清除原空间中地原对象。堆内存空间被分为较大的 Eden 和两块较小的 Survivor，每次只使用 Eden 和 Survivor 区中的一块。该算法是主流的 YGC 算法进行新生代的垃圾回收。
 
-   Serial 回收器是一个主要应用于 YGC 的垃圾回收器，采用串行单线程的方式完成 GC 任务。
+   Serial 回收器是一个主要应用于 YGC (Mark-Copy)的垃圾回收器，采用串行单线程的方式完成 GC 任务。
 
+   <img src="图片/Servial 回收流程.jpg" alt="Servial 回收流程" style="zoom:33%;" />
    
+   CMS 回收器 (Concurrent Mark Sweep Collector)，它通过初始标记 (Initial Mark)、并发标记(Concurrent Mark)、重新标记 (Remark) 、并发清除（Concurrent Sweep）四个步骤完成垃圾回收工作。第 1、3 步的初始标记和重新标记阶段 依然会引发 STW，而第 2、4 步的并发标记和并发清除阶段可以和程序并发执行。CMS 采用的是 “标记-清除算法”。
+   
+   G1（Garbage-First Garbage Collector）垃圾回收器，通过 -XX:+UseG1GC 参数启用。G1 将 Java 堆空间分割成若干大小相同的区域，即 region，包括 Eden、Survivor、Old、Humongous 四种类型。其中，Humongous 是特殊的 Old 类型，专门放置大对象。这样的划分方式意味着不需要一个连续的内存空间管理对象。G1 将空间分为多个区域，优先回收垃圾最多的区域。G1 采用的是 “Mark-Copy”。G1 可预测停顿时间，能够在尽可能快地在指定时间内完成垃圾回收任务。
+   
+   S0/S1 的功能由 G1 中的 Survivor region 来承担。
+   
+   G1 中的四种 region，都处于 Heap 中。G1 执行时使用 4 个 worker 并发执行，在初始标记时还是会触发 STW。G1 的 Concurrent Marking 分为五个主要步骤：
+   
+   第一步，Initial Mark，其实就是 Young GC。该阶段会引起STW， 它会标记 GC Roots 直接可达的存活对象。
+   
+   第二步，Root Region Scan，即根区域扫描。该阶段不会引起STW， 它会并发地从上一阶段标记的存活区域中扫描被引用的老年代对象。
+   
+   第三步，Concurrent Mark， 即并发标记。该阶段从堆中标记存活的对象， 与 CMS类似。
+   
+   第四步，Remark， 即重新标记。该阶段会引起 STW， 与 CMS 类似。它会完成最终的标记处理。
+   
+   第五步，Cleanup，主要为接下来的 Mixed GC做准备。该阶段会统计所有堆区域中的存活对象，并将待回收区域按回收价值排序，优先回收垃圾最多的域。
+   
+   在JDK 11版本中，引入试验性质的新 GC 算法 ZGC，它是一个可伸缩的低延垃圾收集器。ZGC 会因为 GC Root 增大而增加暂停时间，比如很多Thread。Thread的堆栈很深，但是与堆大小以及 Live Data Size无关。与 G1 一样在 ZGC 中将堆内存分成大量的内存区域，即 ZPage， 区别是ZGC中的区域大小是不相同的， 有小型、中型和大型之分。在小型 page 中分配小对象， 最大为256KB， 在中型 page 中分配中等大小的对象，最大为4MB；在大型 page 中分配大于4MB的对象。ZGC 包括十个阶段， 最主要的两个阶段是 mark 和 relocate，GC 不断从标记阶段开始循环，递归所有可达对象， 标记结束时可以知道哪些对象可以被回收。ZGC将标记结果存储在每个page 的 live bitmap 中。在标记过程中，应用线程中的 load barrier 将暂时未标记的引用对象压入缓冲区。一旦缓冲区满，GC 线程会递归遍历此缓冲区中所有可达对象。标记结束后， ZGC需要迁移 relocate 集合中所有的对象。relocate 集合是一组 page 集合，根据某些标准， 系统决定是否需要迁移它们。ZGC 为每个 relocate 集合的页面分配了 forwarding table。它是一个哈希映射（如果对象已经被迁移），它存储一个对象被移动后的新地址。为了实现 ZGC 的目标， 增加了两种方式：着色指针和读屏障。前者使用简洁的多重映射技巧可以处理更多的内存。所谓试验性质是指该策略在 JDK11中只会支持 Linux 系统，其他平台暂不支持，并且在生产环境中还需要考虑如下问题：第一， 如何支持 class unloading，这是一个功能性缺失； 第二，compressed ref 和 ZGC 是冲突的，开ZGC，一定不能有 compressed ref；第三， 解决 single generation问题， 因为应用的分配速率过高的话，GC有可能跟不上，这可能是潜在问题。
